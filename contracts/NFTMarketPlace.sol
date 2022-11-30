@@ -252,6 +252,7 @@ contract NFTMarket is ReentrancyGuard {
 
     uint256 public saleFeePercentage = 5; // Percentage fee paid to team for each sale
     uint256 public volumeTraded = 0; // Total amount traded
+    mapping(address => uint256) public contractToVolumeTraded;
 
     constructor() {
         owner = payable(msg.sender);
@@ -410,7 +411,7 @@ contract NFTMarket is ReentrancyGuard {
         }
         
         volumeTraded=volumeTraded.add(price);
-        
+        contractToVolumeTraded[nftContract] = contractToVolumeTraded[nftContract].add(price);
     }    
         
     
@@ -580,6 +581,7 @@ contract NFTMarket is ReentrancyGuard {
         _itemsSold.increment();
         contractToTokenToItemId[idToMarketItem[itemId].nftContract][idToMarketItem[itemId].tokenId]=0;
         volumeTraded=volumeTraded.add(price);
+        contractToVolumeTraded[idToMarketItem[itemId].nftContract] = contractToVolumeTraded[idToMarketItem[itemId].nftContract].add(price);
 
         emit MarketSaleCreated(
             itemId,
