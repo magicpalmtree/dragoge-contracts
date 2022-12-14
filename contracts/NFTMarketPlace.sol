@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-
 /**
  * @dev Interface of the ERC165 standard, as defined in the
  * https://eips.ethereum.org/EIPS/eip-165[EIP].
@@ -161,7 +160,24 @@ interface IERC721 is IERC165 {
     ) external;
 }
 
+interface IERC721Enumerable is IERC721 {
+    /**
+     * @dev Returns the total amount of tokens stored by the contract.
+     */
+    function totalSupply() external view returns (uint256);
 
+    /**
+     * @dev Returns a token ID owned by `owner` at a given `index` of its token list.
+     * Use along with {balanceOf} to enumerate all of ``owner``'s tokens.
+     */
+    function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256 tokenId);
+
+    /**
+     * @dev Returns a token ID at a given `index` of all the tokens stored by the contract.
+     * Use along with {totalSupply} to enumerate all tokens.
+     */
+    function tokenByIndex(uint256 index) external view returns (uint256);
+}
 
 // File: @openzeppelin/contracts/utils/ReentrancyGuard.sol
 
@@ -250,12 +266,18 @@ contract NFTMarket is ReentrancyGuard {
     address payable public owner; // The owner of the NFTMarket contract 
     address public discountManager = address(0x0); // a contract that can be callled to discover if there is a discount on the transaction fee.
 
-    uint256 public saleFeePercentage = 5; // Percentage fee paid to team for each sale
+    uint256 public saleFeePercentage = 25; // Percentage fee paid to team for each sale
     uint256 public volumeTraded = 0; // Total amount traded
     mapping(address => uint256) public contractToVolumeTraded;
 
+    // added by Magic Palm
+    address payable public devWallet = payable(0xd2282C37C3D9b3b3199180fb9a115f552cAB9381); // The dev share wallet address
+    address payable public burnWallet = payable(0xAd819d0A07AF244DE07e7F3a2d1032b6c5f6c93c); // The burn wallet address
+    IERC721Enumerable public astrogeToken;
+
     constructor() {
         owner = payable(msg.sender);
+        astrogeToken = IERC721Enumerable(0xe0CA71b33b1E640Cb761c10fa9Cbb18f123e5c3a);
     }
 
 
@@ -366,19 +388,21 @@ contract NFTMarket is ReentrancyGuard {
         uint256 price = contractToTokenIdToTokenOffers[nftContract][tokenId][offerIndex].offerAmount;
         address bidder = payable(contractToTokenIdToTokenOffers[nftContract][tokenId][offerIndex].bidder);
         
-        uint256 fees = SafeMath.div(price,100).mul(saleFeePercentage);
+        uint256 fees = SafeMath.div(price,1000).mul(saleFeePercentage);
         contractToTokenIdToTokenOffers[nftContract][tokenId][offerIndex].accepted = true;
 
         // fees and payment
         if (discountManager!=address(0x0)){
             // how much discount does this user get?
             uint256 feeDiscountPercent = IDiscountManager(discountManager).getDiscount(msg.sender);
-            fees = fees.div(100).mul(feeDiscountPercent);
+            fees = fees.div(1000).mul(feeDiscountPercent);
         }
         
         uint256 saleAmount = price.sub(fees);
         payable(msg.sender).transfer(saleAmount);
-        if (fees>0) {owner.transfer(fees);}
+        if (fees > 0) {
+            handleFees(fees);
+        }
         
         if (IERC721(nftContract).ownerOf(tokenId)==address(this)){
             // we have a market item 
@@ -564,17 +588,20 @@ contract NFTMarket is ReentrancyGuard {
         require(idToMarketItem[itemId].seller!=msg.sender , "Cannot buy your own item.");
 
         // take fees and transfer the balance to the seller (TODO)
-        uint256 fees = SafeMath.div(price,100).mul(saleFeePercentage);
+        uint256 fees = SafeMath.div(price,1000).mul(saleFeePercentage);
 
         if (discountManager!=address(0x0)){
             // how much discount does this user get?
             uint256 feeDiscountPercent = IDiscountManager(discountManager).getDiscount(msg.sender);
-            fees = fees.div(100).mul(feeDiscountPercent);
+            fees = fees.div(1000).mul(feeDiscountPercent);
         }
         
         uint256 saleAmount = price.sub(fees);
         idToMarketItem[itemId].seller.transfer(saleAmount);
-        owner.transfer(fees);
+        if(fees > 0) {
+            // owner.transfer(fees);
+            handleFees(fees);
+        }
         IERC721(idToMarketItem[itemId].nftContract).transferFrom(address(this), msg.sender, tokenId);
         idToMarketItem[itemId].isSold = true;
         idToMarketItem[itemId].buyer = payable(msg.sender);
@@ -593,6 +620,31 @@ contract NFTMarket is ReentrancyGuard {
             price
         );
         
+    }
+
+    // added by Magic Palm
+    function handleFees(uint256 fees) internal {
+        // added by Magic Palm
+        uint256 devFee = fees.div(1000).mul(400);
+        uint256 burnFee = devFee;
+        uint256 rewardFee = fees.sub(devFee).sub(burnFee);
+
+        devWallet.transfer(devFee);
+        burnWallet.transfer(burnFee);
+
+        uint256 totalSupply = astrogeToken.totalSupply();
+        
+        for(uint256 i = 1; i <= totalSupply; i ++) {
+            uint256 fee = rewardFee.div(totalSupply);
+            address payable holder = payable(astrogeToken.ownerOf(i));
+            holder.transfer(fee);
+        }
+    }
+
+    function getServiceFee(address buyer) public view returns (uint256) {
+        uint256 discount = IDiscountManager(discountManager).getDiscount(buyer);
+        if(discount == 0) return 0;
+        return saleFeePercentage;
     }
 
     // returns all of the current items for sale
@@ -738,7 +790,7 @@ contract NFTMarket is ReentrancyGuard {
     
     // administration functions
     function setSalePercentageFee(uint256 _amount) public onlyOwner{
-        require(_amount<=5, "5% maximum fee allowed.");
+        require(_amount<=25, "2.5% maximum fee allowed.");
         saleFeePercentage = _amount;
     }
     
@@ -751,8 +803,19 @@ contract NFTMarket is ReentrancyGuard {
         require(_discountManager!=address(0x0), "0x0 address not permitted");
         discountManager = _discountManager;
     }
-    
-    
+
+    //added by Magic Palm
+    function setAstroge(address _astrogeAddr) public onlyOwner {
+        astrogeToken = IERC721Enumerable(_astrogeAddr);
+    }
+
+    function setDevWallet(address _devWallet) public onlyOwner {
+        devWallet = payable(_devWallet);
+    }
+
+    function setBurnWallet(address _burnWallet) public onlyOwner {
+        burnWallet = payable(_burnWallet);
+    }
 }
 
 
